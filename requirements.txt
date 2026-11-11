@@ -1,0 +1,17 @@
+# Resolved together on Windows with CPython 3.12.10. Keep these versions aligned
+# because the LlamaIndex file reader requires pandas<3 while Gradio supports it.
+gradio==6.31.0
+pandas==2.3.3
+pydantic==2.14.3
+python-dotenv==1.2.4
+
+langchain-core==1.7.7
+langchain-google-genai==4.4.3
+
+llama-index-core==0.14.25
+llama-index-readers-file==0.7.0
+llama-index-vector-stores-chroma==0.6.0
+llama-index-embeddings-huggingface==0.8.0
+pypdf==6.21.4
+chromadb==1.5.9
+sentence-transformers==6.2.0
