@@ -15,12 +15,14 @@ from config import (
 )
 from memory.chat_history import to_langchain_messages
 from retrieval.search import format_hit, search_menu
+from utils.citations import linkify_page_citations, menu_page_citation
 
 SYSTEM_PROMPT = """You are MenuLens, an assistant for the menu PDF indexed by this app.
 Use the menu tools for factual menu questions. Treat tool results as the only source
 for dishes, descriptions, prices, ingredients, dietary labels, and allergens. Never
-guess missing details. State clearly when a requested fact is not present. Cite the
-PDF page included in tool results. Pass requested price, cuisine, or dietary constraints
+guess missing details. State clearly when a requested fact is not present. Cite each
+dish using the exact PDF page link included in tool results, preserving its link markup.
+Pass requested price, cuisine, or dietary constraints
 to search_dishes. Do not claim a dish meets a filter unless the verified menu fields support it.
 For comparisons, compare only facts found for each requested dish. Be concise and
 retain conversation context for follow-up questions."""
@@ -28,7 +30,8 @@ retain conversation context for follow-up questions."""
 DIRECT_PROMPT = """You are MenuLens, a menu assistant. Answer using only the retrieved menu
 records included in the user's latest message. Do not invent dishes, prices, ingredients,
 dietary labels, or allergens. If the records do not support an answer, say what is missing.
-Cite the source PDF page for each dish you mention. Be concise."""
+Cite each dish using the PDF page link in its retrieved record. Preserve its link markup.
+Be concise."""
 
 _COMPARISON = re.compile(
     r"\b(compare|comparison|cheaper|cheapest|lowest[- ]priced|most expensive|"
@@ -119,7 +122,8 @@ def _answer_directly(question: str, history: list[dict]) -> str:
     )
     try:
         response, _ = _invoke_with_fallback(messages, GEMINI_MODEL)
-        return _text_content(response.content) or _direct_fallback(hits, "empty response")
+        answer = _text_content(response.content)
+        return linkify_page_citations(answer, hits) if answer else _direct_fallback(hits, "empty response")
     except Exception as exc:
         error_text = str(exc).lower()
         if _is_temporary_gemini_error(error_text):
@@ -164,7 +168,7 @@ def _direct_fallback(hits: list[dict], reason: str = "") -> str:
         )
         page = hit.get("page_number")
         detail = f" — {description}" if description else ""
-        source = f"Menu PDF, page {page}" if page else "Menu PDF"
+        source = menu_page_citation(page, name)
         lines.append(f"- **{name}** ({price_text}){detail}. Source: {source}.")
     return "\n".join(lines)
 

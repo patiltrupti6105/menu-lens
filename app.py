@@ -2,8 +2,9 @@
 
 import gradio as gr
 
-from config import GEMINI_FALLBACK_MODEL, GEMINI_MODEL
+from config import GEMINI_FALLBACK_MODEL, GEMINI_MODEL, PDF_PATH
 from utils.helpers import index_ready
+from utils.citations import linkify_page_citations, menu_page_citation, menu_page_url
 
 
 def respond(message: str, history: list[dict]) -> str:
@@ -13,7 +14,7 @@ def respond(message: str, history: list[dict]) -> str:
         # Defer the LangChain/Gemini imports until the first chat message so UI startup stays quick.
         from agent.assistant import answer_question
 
-        return answer_question(message, history)
+        return linkify_page_citations(answer_question(message, history))
     except Exception as exc:
         message = str(exc)
         error_text = message.lower()
@@ -35,8 +36,15 @@ def respond(message: str, history: list[dict]) -> str:
 with gr.Blocks(title="MenuLens") as demo:
     gr.Markdown(
         "# MenuLens\nAsk about dishes in the prepared menu. Answers use the PDF text and cite its page when available. "
-        "Search results include dish IDs and PDF pages. Price and stated dietary filters are available."
+        "Search results include dish IDs and PDF pages. Price and stated dietary filters are available.\n\n"
+        f"{menu_page_citation(1)}"
     )
+    with gr.Accordion("View the menu PDF here", open=True, elem_id="menu-pdf-accordion"):
+        gr.HTML(
+            f'<iframe id="menulens-pdf-viewer" name="menulens-pdf-viewer" title="Menu PDF" '
+            f'src="{menu_page_url(1)}" '
+            'style="width:100%;height:720px;border:0;"></iframe>'
+        )
     gr.ChatInterface(
         fn=respond,
         title="Menu assistant",
@@ -59,4 +67,7 @@ if __name__ == "__main__":
         print("Menu search is ready.")
     else:
         print("Menu index not found. Build it with: python -m indexing.build_index")
-    demo.launch(share=True)
+    demo.launch(
+        share=True,
+        allowed_paths=[str(PDF_PATH.resolve())],
+    )

@@ -3,6 +3,7 @@
 from typing import Any
 
 from retrieval.vector_store import get_resources
+from utils.citations import menu_page_citation
 
 
 def search_menu(
@@ -56,7 +57,5 @@ def search_menu(
 
 def format_hit(hit: dict[str, Any]) -> str:
     page = hit.get("page_number")
-    citation = hit.get("source_reference") or (
-        f"{hit['source_file']}, page {page}" if page else hit["source_file"]
-    )
+    citation = menu_page_citation(page, hit.get("name")) if page else hit["source_file"]
     return f"[{hit['id']}] {hit['text']}\nSource: {citation}"
