@@ -4,12 +4,25 @@ import re
 from typing import Any
 
 from config import GEMINI_API_KEY, GEMINI_FALLBACK_MODEL, GEMINI_MODEL, GEMINI_REQUEST_TIMEOUT, GEMINI_THINKING_LEVEL
-from retrieval.search import exact_lookup, filter_dishes, list_dishes, resolve_dish_name, search_menu
+from retrieval.search import exact_lookup, filter_dishes, list_dishes, normalize_name, resolve_dish_name, search_menu
 from utils.citations import menu_page_citation
 from indexing.data_loader import MENU_ALLERGEN_DISCLAIMER
 from retrieval.vector_store import get_menu_manifest
 
-_COMPARE = re.compile(r"\b(compare|comparison|difference between|which costs?|cheaper|more expensive)\b", re.I)
+
+_COMPARISON_REQUEST = re.compile(
+    r"\b(compare|comparison|difference between|which costs?|cheaper|more expensive)\b", re.I
+)
+CATEGORY_ALIASES = {
+    "tea": "Teas & Iced Teas", "teas": "Teas & Iced Teas",
+    "iced tea": "Teas & Iced Teas", "iced teas": "Teas & Iced Teas",
+    "coffee": "Coffee & Hot Drinks", "hot drinks": "Coffee & Hot Drinks",
+    "soup": "Soups", "soups": "Soups", "salad": "Salads", "salads": "Salads",
+    "starter": "Starters & Tandoor", "starters": "Starters & Tandoor",
+    "pizza": "Wood-Fired Pizza", "pizzas": "Wood-Fired Pizza",
+    "pasta": "Pasta & Baked Classics", "pastas": "Pasta & Baked Classics",
+    "biryani": "Biryani & Rice", "breads": "Breads from the Tandoor",
+}
 
 
 def _plain(item: Any) -> str:
@@ -56,7 +69,34 @@ def _filters(question: str) -> dict[str, Any]:
         selected = next((value for value in candidates if value.casefold() in q), None)
         if selected:
             result[field] = selected
+    for alias, category in sorted(CATEGORY_ALIASES.items(), key=lambda item: len(item[0]), reverse=True):
+        if re.search(rf"\b{re.escape(alias)}\b", q):
+            result.setdefault("category", category)
+            break
     return result
+
+
+def _comparison_pair(question: str) -> list[str] | None:
+    """Extract two explicitly named items without using semantic substitution."""
+    patterns = (
+        r"\bcompare\s+(.+?)\s+(?:and|vs\.?|versus)\s+(.+?)(?:[?.!]|$)",
+        r"\bcompare\s+(.+?)\s+with\s+(.+?)(?:[?.!]|$)",
+        r"\bdifference between\s+(.+?)\s+and\s+(.+?)(?:[?.!]|$)",
+    )
+    match = next((match for pattern in patterns if (match := re.search(pattern, question, re.I))), None)
+    if not match:
+        return None
+    return [
+        re.sub(r"^(?:the|a|an)\s+", "", re.sub(r",?\s*(?:please|for me|thanks)$", "", part.strip(), flags=re.I), flags=re.I)
+        for part in match.groups()
+    ]
+
+
+def _compare_all_category(question: str) -> str | None:
+    for alias, category in sorted(CATEGORY_ALIASES.items(), key=lambda item: len(item[0]), reverse=True):
+        if re.search(rf"\b(?:all|the)\s+{re.escape(alias)}\b", question, re.I):
+            return category
+    return None
 
 
 def _mentioned_dishes(question: str, context: str) -> tuple[list[dict], list[str]]:
@@ -202,22 +242,24 @@ def answer_question(question: str, history: list[dict] | None = None) -> str:
         mentioned and not current_names and not explicit_lookup and
         (len(question.split()) <= 3 or re.search(r"\b(it|this|that|them|those|same one|which one|what about|how about|and that|and it)\b", question, re.I))
     )
-    explicit_ids = bool(re.search(r"\bD\s*0*\d{1,3}\b", question, re.I))
-    comparison = bool(_COMPARE.search(question))
-    exact = exact_lookup(question) if not comparison else []
+    standalone_id = re.fullmatch(r"\s*(?:(?:tell me about|what is|find|details for|details about)\s+)?D\s*0*(\d{1,3})\s*[?.!]*\s*", question, re.I)
+    comparison = bool(_COMPARISON_REQUEST.search(question))
+    exact_name_question = any(
+        normalize_name(question) == normalize_name(hit.get("name", ""))
+        for hit in list_dishes()
+    )
+    exact = []
+    if not comparison and (explicit_lookup or standalone_id or exact_name_question):
+        exact = exact_lookup(question)
+        if not exact and explicit_lookup and not re.search(r"\bD\s*0*\d{1,3}\b", explicit_lookup.group(1), re.I):
+            exact = resolve_dish_name(explicit_lookup.group(1))
 
+    explicit_id_lookup = bool(standalone_id or (
+        explicit_lookup and re.search(r"\bD\s*0*\d{1,3}\b", explicit_lookup.group(1), re.I)
+    ))
     if comparison:
-        requested_names = []
-        pair = re.search(r"\bcompare\s+(.+?)\s+(?:and|vs\.?|versus)\s+(.+?)(?:[?.!]|$)", question, re.I)
-        if not pair:
-            pair = re.search(r"\bcompare\s+(.+?)\s+with\s+(.+?)(?:[?.!]|$)", question, re.I)
-        if pair:
-            requested_names = [
-                re.sub(r"^(?:the|a|an)\s+", "", re.sub(r",?\s*(?:please|for me|thanks)$", "", part.strip(), flags=re.I), flags=re.I)
-                for part in pair.groups()
-            ]
+        requested_names = _comparison_pair(question)
         if requested_names:
-            # Each requested dish is resolved independently; never use a semantic substitute.
             hits = []
             missing = []
             for requested in requested_names:
@@ -227,33 +269,33 @@ def answer_question(question: str, history: list[dict] | None = None) -> str:
                 else:
                     missing.append(requested)
             if missing:
-                return finish("I couldn't uniquely match these dish names in the menu: " + ", ".join(missing) + ". Please use a full menu name or dish ID; I haven't substituted similar dishes.")
-            deduplicated = {hit["dish_id"]: hit for hit in hits}
-            hits = list(deduplicated.values())
-        elif mentioned:
-            # Contextual comparisons use exact dishes from the immediately prior turn.
-            hits = []
-            for requested in mentioned:
-                hits.extend(exact_lookup(requested["dish_id"]))
+                return finish("I couldn't uniquely match these requested dishes: " + ", ".join(missing) + ". Please use a full menu name or dish ID; I haven't substituted similar dishes.")
+            hits = list({hit["dish_id"]: hit for hit in hits}.values())
         else:
-            hits = filter_dishes(filters) if filters else []
-            if not hits:
-                return finish("Please name two dishes to compare, or add a category or dietary constraint to compare matching menu items.")
-            hits = hits[:2]
+            group_category = _compare_all_category(question)
+            if group_category:
+                hits = filter_dishes({**filters, "category": group_category})
+            elif mentioned and len(mentioned) >= 2:
+                hits = []
+                for requested in mentioned:
+                    hits.extend(exact_lookup(requested["dish_id"]))
+            elif filters:
+                hits = search_menu(question, top_k=5, filters=filters)
+            else:
+                hits = search_menu(question, top_k=5)
         if len(hits) < 2:
-            return finish("Please name two dishes to compare, or add a category or dietary constraint to compare matching menu items.")
-        intent = "Compare the listed dishes using only fields present in the menu. Mention unavailable facts as unknown."
+            return finish("I couldn't find enough matching menu dishes to compare. Try naming two dishes or a menu category.")
+        intent = "Compare only the retrieved menu records. Explain differences using menu-supported descriptions, prices, cuisine, dietary labels, and allergens when available. Do not infer missing facts."
+    elif exact:
+        hits = exact
+        intent = "Answer about this exact requested dish using its menu record. Do not replace it."
+    elif explicit_id_lookup:
+        return finish("I couldn't find that dish ID in the current menu index.")
     elif contextual_followup:
         hits = []
         for requested in mentioned:
             hits.extend(exact_lookup(requested["dish_id"]))
         intent = "Answer this follow-up about the dish or dishes in the immediately preceding conversation using their exact menu records."
-    elif exact:
-        hits = exact
-        intent = "Answer about this exact requested dish using its menu record. Do not replace it."
-    elif explicit_ids:
-        # Exact ID miss: avoid presenting another record as the requested dish.
-        return finish("I couldn't find that dish ID in the current menu index.")
     else:
         intent = "Answer the user's menu question using only the retrieved records."
         if filters:
@@ -276,8 +318,8 @@ def answer_question(question: str, history: list[dict] | None = None) -> str:
         "For recommendation or suggestion requests, offer 3 to 5 distinct dishes when that many relevant records are available; offer fewer when fewer records meet the request. "
         "For each recommendation, briefly explain why it matches the user's request using specific details in its menu description, and include its price and description when available. "
         "Do not label a dish spicy, warming, light, creamy, or similar unless the menu description supports that wording. Keep menu facts distinct from any inference; explicitly qualify an inference and explain what it is based on. "
-        "For exact dish lookups and comparisons, answer the specific request without adding unrelated recommendations. Mention dish IDs. Explain dietary preparation conditions and never present unknown suitability as confirmed. "
-        "For comparisons, compare only the actual requested records and state when a detail is missing. End with one useful follow-up question when it would help the diner choose. "
+        "For exact dish lookups, answer the specific request without adding unrelated recommendations. Mention dish IDs. Explain dietary preparation conditions and never present unknown suitability as confirmed. "
+        "For comparisons, use only the actual records supplied and state when details are missing. End with one useful follow-up question when it would help the diner choose. "
         "Do not add source lines, PDF citations, or a source section; the app adds a PDF citation beside each dish it identifies in your answer."
     )
     system += " Specific task: " + intent

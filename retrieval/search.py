@@ -63,7 +63,7 @@ def exact_lookup(query: str) -> list[dict[str, Any]]:
 def resolve_dish_name(query: str) -> list[dict[str, Any]]:
     """Resolve an exact name or a unique set of words from one menu name.
 
-    This is useful for short comparison labels such as "ginger tea" for
+    This is useful for short dish labels such as "ginger tea" for
     "Ginger Honey Tea". Ambiguous partial names deliberately remain unresolved.
     """
     exact = exact_lookup(query)

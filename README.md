@@ -27,10 +27,10 @@ The first index build downloads the embedding model if it is not already cached.
 ## How a question is answered
 
 1. Python reads the current question and recent chat messages.
-2. It detects dish IDs and names, comparisons, supported dietary or price filters, and menu-section categories.
-3. Exact ID/name requests read the matching Chroma record directly. Structured filters are applied before similarity ranking, and missing dietary values never pass a positive filter. A comparison retrieves each named dish independently.
-4. The matching records, page numbers, and relevant conversation context go to Gemini. Gemini writes a concise answer from those records only.
-5. The app adds dish IDs and clickable PDF page sources. For allergen questions it also gives the menu's cross-contact warning.
+2. Python detects exact dish IDs/names, supported dietary or price filters, menu-section categories, and relevant follow-up context.
+3. Exact requests read the matching Chroma record. Other questions are embedded and retrieved from Chroma; structured filters are applied before similarity ranking, and missing dietary values never pass a positive filter.
+4. The original question, relevant conversation context, and retrieved menu text go to Gemini. Gemini writes a natural-language answer grounded in those records.
+5. The app adds dish IDs and clickable PDF page sources for dishes named in the answer. For allergen questions it also gives the menu's cross-contact warning. Dish-by-dish comparisons are not supported.
 
 If Gemini is not configured or temporarily unavailable, MenuLens displays the retrieved records rather than inventing a natural-language answer.
 
