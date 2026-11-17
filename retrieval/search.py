@@ -120,8 +120,9 @@ def search_menu(query: str, top_k: int = 5, filters: dict[str, Any] | None = Non
         args["where"] = where_parts[0]
     elif where_parts:
         args["where"] = {"$and": where_parts}
+    n_results = count if where_parts else min(top_k, count)
     result = collection.query(
-        query_embeddings=[embedder.get_text_embedding(query)], n_results=min(top_k, count),
+        query_embeddings=[embedder.get_text_embedding(query)], n_results=n_results,
         include=["documents", "metadatas", "distances"], **args,
     )
     hits = []

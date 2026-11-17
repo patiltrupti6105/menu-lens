@@ -26,11 +26,10 @@ The first index build downloads the embedding model if it is not already cached.
 
 ## How a question is answered
 
-1. Python reads the current question and recent chat messages.
-2. Python detects exact dish IDs/names, supported dietary or price filters, menu-section categories, and relevant follow-up context.
-3. Exact requests read the matching Chroma record. Other questions are embedded and retrieved from Chroma; structured filters are applied before similarity ranking, and missing dietary values never pass a positive filter.
-4. The original question, relevant conversation context, and retrieved menu text go to Gemini. Gemini writes a natural-language answer grounded in those records.
-5. The app adds dish IDs and clickable PDF page sources for dishes named in the answer. For allergen questions it also gives the menu's cross-contact warning. Dish-by-dish comparisons are not supported.
+1. Python reads the current question and recent chat messages, and prepares a retrieval query with only the recent exchange when the message is a follow-up.
+2. Supported dietary, price, cuisine, and category filters are extracted. Explicit dish IDs use deterministic lookup; other questions use semantic search in Chroma with metadata filters. Requests for all records matching structured filters return the full filtered set.
+3. Gemini receives the original question, recent conversation, structured retrieved menu records, and instructions to use only those records.
+4. The app adds clickable PDF page sources for dishes named in the answer. For allergen questions it also gives the menu's cross-contact warning.
 
 If Gemini is not configured or temporarily unavailable, MenuLens displays the retrieved records rather than inventing a natural-language answer.
 
@@ -50,7 +49,7 @@ The parser expects selectable text. A scanned image-only PDF needs OCR before in
 - `indexing/build_index.py`: safe versioned collection creation and activation.
 - `retrieval/vector_store.py`: active collection and cached embedding access.
 - `retrieval/search.py`: exact lookup, structured filters, and semantic search.
-- `retrieval/query_processor.py`: predictable request routing and direct Gemini call.
+- `retrieval/query_processor.py`: shared retrieval flow, context preparation, and direct Gemini call.
 - `utils/citations.py`: PDF page links.
 
 ## Settings
